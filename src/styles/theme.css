@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   ENCRYPTDROP MINIMALIST SINGLE-FILE THEME CONFIGURATION
+   ========================================================================== */
+:root {
+  /* Ultra-minimalist Dark Palette */
+  --bg-main: #0b0f17;
+  --bg-card: #121824;
+  --bg-card-hover: #182030;
+  --border-color: #1e293b;
+
+  /* Subtle Minimalist Accents */
+  --accent-primary: #38bdf8; /* Sky blue */
+  --accent-hover: #0284c7;
+  --accent-success: #34d399; /* Mint green */
+  --accent-warning: #fbbf24;
+  --accent-danger: #f87171;
+
+  /* Crisp Muted Text */
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
