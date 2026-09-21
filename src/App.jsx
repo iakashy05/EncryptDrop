@@ -375,10 +375,9 @@ export default function App() {
     speedIntervalRef.current = setInterval(() => {
       if (transferManagerRef.current) {
         const currentBytes = transferManagerRef.current.getTotalTransferredBytes();
-        const deltaBytes = currentBytes - lastBytesRef.current;
-        lastBytesRef.current = currentBytes;
-        const mbps = ((deltaBytes * 8) / (1024 * 1024)).toFixed(1);
-        setSpeedMbps(parseFloat(mbps));
+        // Real MegaBytes per second (MB/s)
+        const mbPerSec = (deltaBytes / (1024 * 1024)).toFixed(1);
+        setSpeedMbps(parseFloat(mbPerSec));
       }
     }, 1000);
   };

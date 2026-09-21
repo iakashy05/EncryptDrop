@@ -53,7 +53,7 @@ export class WebRTCManager {
   createDataChannel(label = 'encryptdrop-transfer-channel') {
     if (!this.peerConnection) return;
     const channel = this.peerConnection.createDataChannel(label, {
-      ordered: true // Reliable, in-order packet delivery
+      ordered: false // Unordered reliable mode: eliminates Head-of-Line blocking for maximum speed
     });
     this._setupDataChannel(channel);
   }
@@ -154,6 +154,15 @@ export class WebRTCManager {
   isBufferLow() {
     if (!this.dataChannel) return true;
     return this.dataChannel.bufferedAmount <= this.LOW_BUFFER;
+  }
+
+  /**
+   * Check if channel buffer is full (reached 8MB ceiling).
+   * @returns {boolean}
+   */
+  isBufferFull() {
+    if (!this.dataChannel) return false;
+    return this.dataChannel.bufferedAmount >= this.MAX_BUFFER;
   }
 
   /**

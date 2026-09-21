@@ -8,7 +8,7 @@ import JSZip from 'jszip';
 import { computeSHA256 } from './crypto.js';
 import { playCompleteChime, triggerHapticSuccess } from './audioHaptics.js';
 
-export const CHUNK_SIZE = 64 * 1024; // 64KB optimal WebRTC chunk size
+export const CHUNK_SIZE = 60 * 1024; // 60KB (61,440 bytes + 40-byte header = 61,480 bytes < 65,535 SCTP MTU)
 const FILE_ID_HEADER_SIZE = 36;       // Fixed 36-byte header size for fileId
 
 /**
@@ -194,7 +194,7 @@ export class TransferManager {
   }
 
   /**
-   * Stream a single file chunk by chunk with high-speed event-driven backpressure.
+   * Stream a single file chunk by chunk with 2MB block disk prefetching and event-driven backpressure.
    */
   async streamFile(fileId, startChunkIndex = 0) {
     const transfer = this.outgoingTransfers.get(fileId);
@@ -203,34 +203,45 @@ export class TransferManager {
     const file = transfer.fileObject;
     transfer.currentChunk = startChunkIndex;
 
+    const BLOCK_SIZE = 2 * 1024 * 1024; // 2MB disk prefetch block
+
     while (transfer.currentChunk < transfer.totalChunks) {
       if (transfer.isPaused || transfer.isCanceled) {
         console.log(`[TransferManager] Streaming ${transfer.isPaused ? 'PAUSED' : 'CANCELED'} for ${fileId}`);
         break;
       }
 
-      // Zero-delay native event backpressure: wait only if buffer is filled past 8MB
-      if (this.webrtc && !this.webrtc.isBufferLow()) {
-        await this.webrtc.waitForBufferLow();
+      // 1. Read a 2MB block from disk into RAM in ONE single fast read
+      const currentByteOffset = transfer.currentChunk * CHUNK_SIZE;
+      const blockEnd = Math.min(currentByteOffset + BLOCK_SIZE, file.size);
+      const blockSlice = file.slice ? file.slice(currentByteOffset, blockEnd) : new Blob([]);
+      const blockBuffer = await blockSlice.arrayBuffer();
+
+      // 2. Stream 60KB chunks from in-memory ArrayBuffer at maximum line rate
+      let blockOffset = 0;
+      while (blockOffset < blockBuffer.byteLength && transfer.currentChunk < transfer.totalChunks) {
+        if (transfer.isPaused || transfer.isCanceled) break;
+
+        // Wait only when WebRTC buffer hits 8MB ceiling, draining to 1MB
+        if (this.webrtc && this.webrtc.isBufferFull()) {
+          await this.webrtc.waitForBufferLow();
+        }
+
+        const chunkIndex = transfer.currentChunk;
+        const chunkSize = Math.min(CHUNK_SIZE, blockBuffer.byteLength - blockOffset);
+        const rawChunk = blockBuffer.slice(blockOffset, blockOffset + chunkSize);
+
+        const packetBuffer = this._packChunkData(fileId, chunkIndex, rawChunk);
+        if (this.webrtc) {
+          this.webrtc.send(packetBuffer);
+        }
+
+        blockOffset += chunkSize;
+        transfer.sentBytes += chunkSize;
+        transfer.currentChunk++;
+
+        this._emitThrottledProgress(fileId, transfer, 'upload');
       }
-
-      const chunkIndex = transfer.currentChunk;
-      const start = chunkIndex * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const rawChunkSlice = file.slice ? file.slice(start, end) : new Blob([]);
-      const rawBuffer = await rawChunkSlice.arrayBuffer();
-
-      // Pack [36-byte fileId | 4-byte chunkIndex | rawBuffer]
-      const packetBuffer = this._packChunkData(fileId, chunkIndex, rawBuffer);
-
-      if (this.webrtc) {
-        this.webrtc.send(packetBuffer);
-      }
-
-      transfer.sentBytes += rawBuffer.byteLength;
-      transfer.currentChunk++;
-
-      this._emitThrottledProgress(fileId, transfer, 'upload');
     }
   }
 
