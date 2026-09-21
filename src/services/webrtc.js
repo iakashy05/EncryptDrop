@@ -16,8 +16,8 @@ export class WebRTCManager {
     this.peerConnection = null;
     this.dataChannel = null;
     this.callbacks = {};
-    this.MAX_BUFFER = 1024 * 1024; // 1MB high watermark threshold
-    this.LOW_BUFFER = 64 * 1024;   // 64KB low watermark threshold
+    this.MAX_BUFFER = 8 * 1024 * 1024; // 8MB high watermark threshold for high-speed pipelining
+    this.LOW_BUFFER = 1024 * 1024;     // 1MB low watermark threshold
   }
 
   /**
@@ -154,6 +154,45 @@ export class WebRTCManager {
   isBufferLow() {
     if (!this.dataChannel) return true;
     return this.dataChannel.bufferedAmount <= this.LOW_BUFFER;
+  }
+
+  /**
+   * Zero-delay Promise resolving on native bufferedamountlow event.
+   * @returns {Promise<void>}
+   */
+  waitForBufferLow() {
+    if (!this.dataChannel || this.isBufferLow()) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let resolved = false;
+      const onLow = () => {
+        if (!resolved) {
+          resolved = true;
+          if (this.dataChannel) {
+            this.dataChannel.removeEventListener('bufferedamountlow', onLow);
+          }
+          resolve();
+        }
+      };
+
+      if (this.dataChannel) {
+        this.dataChannel.addEventListener('bufferedamountlow', onLow, { once: true });
+      } else {
+        resolve();
+      }
+
+      // Safety timeout in case event is delayed
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          if (this.dataChannel) {
+            this.dataChannel.removeEventListener('bufferedamountlow', onLow);
+          }
+          resolve();
+        }
+      }, 100);
+    });
   }
 
   on(event, callback) {

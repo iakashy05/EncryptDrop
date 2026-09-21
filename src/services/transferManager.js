@@ -1,10 +1,11 @@
 /**
- * EncryptDrop Advanced P2P Transfer Manager
- * Handles multi-file & folder zipping, chunk streaming, AES-256-GCM encryption,
- * pause, resume, cancel, bi-directional transfers, and SHA-256 checksum verification.
+ * EncryptDrop High-Speed P2P Transfer Manager
+ * Hardware-accelerated native WebRTC DTLS streaming.
+ * Handles folder zipping, zero-copy binary streaming, event-driven backpressure,
+ * Quick Share-style transfer approval, pause/resume, and SHA-256 verification.
  */
 import JSZip from 'jszip';
-import { encryptChunk, decryptChunk, deriveChunkIV, computeSHA256 } from './crypto.js';
+import { computeSHA256 } from './crypto.js';
 import { playCompleteChime, triggerHapticSuccess } from './audioHaptics.js';
 
 export const CHUNK_SIZE = 64 * 1024; // 64KB optimal WebRTC chunk size
@@ -42,20 +43,19 @@ export async function zipFolderFiles(filesArray) {
 }
 
 export class TransferManager {
-  constructor(webrtcManager, cryptoKey) {
+  constructor(webrtcManager) {
     this.webrtc = webrtcManager;
-    this.cryptoKey = cryptoKey;
 
     // Bi-directional transfer state maps
-    this.outgoingTransfers = new Map(); // fileId -> { file, name, path, size, isPaused, isCanceled, currentChunk }
-    this.incomingTransfers = new Map(); // fileId -> { name, size, type, path, sha256, chunks: [], receivedBytes, isPaused, isCanceled }
+    this.outgoingTransfers = new Map(); // fileId -> { fileObject, name, path, size, isPaused, isCanceled, currentChunk, sentBytes }
+    this.incomingTransfers = new Map(); // fileId -> { name, size, type, path, chunks: [], receivedBytes, isPaused, isCanceled }
+
+    this.pendingOutgoingBatch = null;
+    this.pendingIncomingBatch = null;
+    this.lastProgressEmit = new Map(); // Throttle map: fileId -> timestamp
 
     this.callbacks = {};
     this._bindEvents();
-  }
-
-  setCryptoKey(key) {
-    this.cryptoKey = key;
   }
 
   _bindEvents() {
@@ -64,34 +64,24 @@ export class TransferManager {
     this.webrtc.on('message', async (data) => {
       try {
         if (typeof data === 'string') {
-          // Control JSON Packet (Header, Pause, Resume, Cancel)
           const packet = JSON.parse(data);
           await this._handleControlPacket(packet);
         } else if (data instanceof ArrayBuffer) {
-          // Binary Encrypted Chunk Packet
-          await this._handleBinaryChunk(data);
+          this._handleBinaryChunk(data);
         }
       } catch (err) {
         console.error('[TransferManager] Error processing packet:', err);
       }
     });
-
-    this.webrtc.on('buffered-amount-low', () => {
-      this._emitEvent('buffer-low');
-    });
   }
 
   /**
    * Parse dropped or selected FileList / Folders into a standardized manifest array.
-   * If a folder is detected, automatically zips it into a single .zip file on-the-fly.
-   * @param {FileList|File[]} fileList 
-   * @returns {Promise<Array>}
    */
   async buildFolderManifest(fileList) {
     const manifest = [];
     let filesArray = Array.from(fileList);
 
-    // If folder selection is detected, zip folder into a single .zip file on-the-fly
     if (isFolderSelection(filesArray)) {
       console.log('[TransferManager] Folder detected! Zipping folder contents on-the-fly...');
       const zippedFile = await zipFolderFiles(filesArray);
@@ -109,9 +99,8 @@ export class TransferManager {
         name: file.name,
         path: relativePath,
         size: file.size,
-        type: file.type || 'application/zip',
+        type: file.type || 'application/octet-stream',
         totalChunks,
-        sha256: null,
         fileObject: file
       });
     }
@@ -119,18 +108,17 @@ export class TransferManager {
   }
 
   /**
-   * Send a list of files or zipped folder hierarchy to connected peer.
-   * @param {FileList|File[]} fileList 
+   * Request to send files (AirDrop / Quick Share style approval handshake).
    */
-  async sendFiles(fileList) {
-    if (!this.webrtc || !this.cryptoKey) {
-      throw new Error('WebRTC or CryptoKey not initialized');
+  async requestSendFiles(fileList) {
+    if (!this.webrtc) {
+      throw new Error('WebRTC not initialized');
     }
 
     const manifest = await this.buildFolderManifest(fileList);
     const batchId = `batch_${Date.now()}`;
+    const totalSize = manifest.reduce((acc, f) => acc + f.size, 0);
 
-    // Store in outgoing map
     for (const item of manifest) {
       this.outgoingTransfers.set(item.fileId, {
         ...item,
@@ -141,24 +129,72 @@ export class TransferManager {
       });
     }
 
-    // 1. Send BATCH_START Header over WebRTC
-    const headerPacket = {
-      type: 'BATCH_START',
-      batchId,
-      files: manifest.map(({ fileObject, ...meta }) => meta)
-    };
-    this.webrtc.send(JSON.stringify(headerPacket));
+    this.pendingOutgoingBatch = { batchId, manifest };
 
-    // 2. Stream files sequentially
-    for (const item of manifest) {
-      await this.streamFile(item.fileId);
-    }
+    // Send request packet to receiver
+    this.webrtc.send(JSON.stringify({
+      type: 'TRANSFER_REQUEST',
+      batchId,
+      files: manifest.map(({ fileObject, ...meta }) => meta),
+      totalSize
+    }));
+
+    this._emitEvent('waiting-approval', {
+      batchId,
+      files: manifest,
+      totalSize
+    });
+
+    return batchId;
   }
 
   /**
-   * Stream a single file chunk by chunk with backpressure and encryption.
-   * @param {string} fileId 
-   * @param {number} startChunkIndex 
+   * Receiver accepts incoming transfer request.
+   */
+  acceptTransfer(batchId) {
+    if (!this.pendingIncomingBatch || this.pendingIncomingBatch.batchId !== batchId) return;
+
+    for (const meta of this.pendingIncomingBatch.files) {
+      this.incomingTransfers.set(meta.fileId, {
+        ...meta,
+        chunks: new Array(meta.totalChunks),
+        receivedChunksCount: 0,
+        receivedBytes: 0,
+        isPaused: false,
+        isCanceled: false,
+        isCompleted: false
+      });
+    }
+
+    if (this.webrtc) {
+      this.webrtc.send(JSON.stringify({
+        type: 'TRANSFER_RESPONSE',
+        batchId,
+        accepted: true
+      }));
+    }
+
+    this._emitEvent('batch-start', this.pendingIncomingBatch.files);
+    this.pendingIncomingBatch = null;
+  }
+
+  /**
+   * Receiver declines incoming transfer request.
+   */
+  rejectTransfer(batchId) {
+    if (this.webrtc) {
+      this.webrtc.send(JSON.stringify({
+        type: 'TRANSFER_RESPONSE',
+        batchId,
+        accepted: false
+      }));
+    }
+    this.pendingIncomingBatch = null;
+    this._emitEvent('request-declined', { batchId });
+  }
+
+  /**
+   * Stream a single file chunk by chunk with high-speed event-driven backpressure.
    */
   async streamFile(fileId, startChunkIndex = 0) {
     const transfer = this.outgoingTransfers.get(fileId);
@@ -167,24 +203,15 @@ export class TransferManager {
     const file = transfer.fileObject;
     transfer.currentChunk = startChunkIndex;
 
-    // First compute SHA-256 for integrity verification if not already done
-    if (!transfer.sha256 && file && file.size > 0 && typeof file.arrayBuffer === 'function') {
-      const fullBuffer = await file.arrayBuffer();
-      transfer.sha256 = await computeSHA256(fullBuffer);
-
-      if (this.webrtc) {
-        this.webrtc.send(JSON.stringify({
-          type: 'FILE_SHA256',
-          fileId,
-          sha256: transfer.sha256
-        }));
-      }
-    }
-
     while (transfer.currentChunk < transfer.totalChunks) {
       if (transfer.isPaused || transfer.isCanceled) {
         console.log(`[TransferManager] Streaming ${transfer.isPaused ? 'PAUSED' : 'CANCELED'} for ${fileId}`);
         break;
+      }
+
+      // Zero-delay native event backpressure: wait only if buffer is filled past 8MB
+      if (this.webrtc && !this.webrtc.isBufferLow()) {
+        await this.webrtc.waitForBufferLow();
       }
 
       const chunkIndex = transfer.currentChunk;
@@ -193,48 +220,24 @@ export class TransferManager {
       const rawChunkSlice = file.slice ? file.slice(start, end) : new Blob([]);
       const rawBuffer = await rawChunkSlice.arrayBuffer();
 
-      // Derive chunk IV and encrypt using Web Crypto API
-      const iv = deriveChunkIV(fileId, chunkIndex);
-      const encryptedBuffer = await encryptChunk(rawBuffer, this.cryptoKey, iv);
+      // Pack [36-byte fileId | 4-byte chunkIndex | rawBuffer]
+      const packetBuffer = this._packChunkData(fileId, chunkIndex, rawBuffer);
 
-      // Packet format: [36-byte fileId header | 4-byte chunkIndex | Encrypted Payload]
-      const packetBuffer = this._packChunkData(fileId, chunkIndex, encryptedBuffer);
-
-      // Send over WebRTC DataChannel
-      let isBufferOkay = true;
       if (this.webrtc) {
-        isBufferOkay = this.webrtc.send(packetBuffer);
+        this.webrtc.send(packetBuffer);
       }
+
       transfer.sentBytes += rawBuffer.byteLength;
       transfer.currentChunk++;
 
-      const progressPercent = transfer.size > 0 ? Math.round((transfer.sentBytes / transfer.size) * 100) : 100;
-
-      this._emitEvent('progress', {
-        fileId,
-        name: transfer.name,
-        path: transfer.path,
-        direction: 'upload',
-        currentChunk: transfer.currentChunk,
-        totalChunks: transfer.totalChunks,
-        sentBytes: transfer.sentBytes,
-        totalBytes: transfer.size,
-        size: transfer.size,
-        progressPercent: Math.min(progressPercent, 100)
-      });
-
-      // Throttle if WebRTC buffer is full
-      if (!isBufferOkay && this.webrtc) {
-        await this._waitForBufferLow();
-      }
+      this._emitThrottledProgress(fileId, transfer, 'upload');
     }
   }
 
   /**
-   * Pack binary metadata header with encrypted chunk into a single ArrayBuffer.
-   * Layout: [36 bytes fileId | 4 bytes uint32 chunkIndex | N bytes payload]
+   * Pack binary metadata header with raw chunk into a single ArrayBuffer.
    */
-  _packChunkData(fileId, chunkIndex, encryptedBuffer) {
+  _packChunkData(fileId, chunkIndex, rawBuffer) {
     const encoder = new TextEncoder();
     const safeId = fileId.substring(0, FILE_ID_HEADER_SIZE).padEnd(FILE_ID_HEADER_SIZE, ' ');
     const idBytes = encoder.encode(safeId);
@@ -243,10 +246,10 @@ export class TransferManager {
     const dataView = new DataView(indexBytes.buffer);
     dataView.setUint32(0, chunkIndex, false); // Big Endian uint32
 
-    const packed = new Uint8Array(FILE_ID_HEADER_SIZE + 4 + encryptedBuffer.byteLength);
+    const packed = new Uint8Array(FILE_ID_HEADER_SIZE + 4 + rawBuffer.byteLength);
     packed.set(idBytes, 0);
     packed.set(indexBytes, FILE_ID_HEADER_SIZE);
-    packed.set(new Uint8Array(encryptedBuffer), FILE_ID_HEADER_SIZE + 4);
+    packed.set(new Uint8Array(rawBuffer), FILE_ID_HEADER_SIZE + 4);
     return packed.buffer;
   }
 
@@ -261,9 +264,9 @@ export class TransferManager {
     const dataView = new DataView(packedBuffer, FILE_ID_HEADER_SIZE, 4);
     const chunkIndex = dataView.getUint32(0, false);
 
-    const cipherBuffer = packedBuffer.slice(FILE_ID_HEADER_SIZE + 4);
+    const rawBuffer = packedBuffer.slice(FILE_ID_HEADER_SIZE + 4);
 
-    return { fileId, chunkIndex, cipherBuffer };
+    return { fileId, chunkIndex, rawBuffer };
   }
 
   /**
@@ -271,25 +274,32 @@ export class TransferManager {
    */
   async _handleControlPacket(packet) {
     switch (packet.type) {
-      case 'BATCH_START':
-        for (const meta of packet.files) {
-          this.incomingTransfers.set(meta.fileId, {
-            ...meta,
-            chunks: new Array(meta.totalChunks),
-            receivedChunksCount: 0,
-            receivedBytes: 0,
-            isPaused: false,
-            isCanceled: false,
-            isCompleted: false,
-            sha256Match: null
-          });
-        }
-        this._emitEvent('batch-start', packet.files);
+      case 'TRANSFER_REQUEST':
+        this.pendingIncomingBatch = {
+          batchId: packet.batchId,
+          files: packet.files,
+          totalSize: packet.totalSize
+        };
+        this._emitEvent('incoming-request', {
+          batchId: packet.batchId,
+          files: packet.files,
+          totalSize: packet.totalSize
+        });
         break;
 
-      case 'FILE_SHA256':
-        if (this.incomingTransfers.has(packet.fileId)) {
-          this.incomingTransfers.get(packet.fileId).sha256 = packet.sha256;
+      case 'TRANSFER_RESPONSE':
+        if (packet.accepted) {
+          this._emitEvent('transfer-accepted', { batchId: packet.batchId });
+          if (this.pendingOutgoingBatch && this.pendingOutgoingBatch.batchId === packet.batchId) {
+            const manifest = this.pendingOutgoingBatch.manifest;
+            this.pendingOutgoingBatch = null;
+            for (const item of manifest) {
+              await this.streamFile(item.fileId);
+            }
+          }
+        } else {
+          this._emitEvent('transfer-rejected', { batchId: packet.batchId });
+          this.pendingOutgoingBatch = null;
         }
         break;
 
@@ -308,85 +318,75 @@ export class TransferManager {
   }
 
   /**
-   * Handle incoming binary encrypted chunk packet from peer.
+   * Handle incoming binary raw chunk packet directly from peer.
    */
-  async _handleBinaryChunk(packedBuffer) {
-    const { fileId, chunkIndex, cipherBuffer } = this._unpackChunkData(packedBuffer);
+  _handleBinaryChunk(packedBuffer) {
+    const { fileId, chunkIndex, rawBuffer } = this._unpackChunkData(packedBuffer);
     const transfer = this.incomingTransfers.get(fileId);
 
-    if (!transfer) {
-      console.warn(`[TransferManager] Received chunk for unknown fileId: "${fileId}".`);
-      return;
+    if (!transfer || transfer.isCanceled || transfer.isPaused) return;
+
+    transfer.chunks[chunkIndex] = rawBuffer;
+    transfer.receivedChunksCount++;
+    transfer.receivedBytes += rawBuffer.byteLength;
+
+    this._emitThrottledProgress(fileId, transfer, 'download');
+
+    if (transfer.receivedChunksCount === transfer.totalChunks && !transfer.isCompleted) {
+      transfer.isCompleted = true;
+      this._finalizeFileDownload(fileId);
     }
+  }
 
-    if (transfer.isCanceled || transfer.isPaused) return;
+  /**
+   * Throttle React progress updates to ~16fps (every 60ms) to prevent UI thread thrashing.
+   */
+  _emitThrottledProgress(fileId, transfer, direction) {
+    const now = Date.now();
+    const last = this.lastProgressEmit.get(fileId) || 0;
+    const isComplete = (transfer.currentChunk >= transfer.totalChunks) || (transfer.receivedChunksCount >= transfer.totalChunks);
 
-    try {
-      // Derive IV and decrypt chunk using Web Crypto API
-      const iv = deriveChunkIV(fileId, chunkIndex);
-      const decryptedBuffer = await decryptChunk(cipherBuffer, this.cryptoKey, iv);
-
-      transfer.chunks[chunkIndex] = decryptedBuffer;
-      transfer.receivedChunksCount++;
-      transfer.receivedBytes += decryptedBuffer.byteLength;
-
-      const progressPercent = transfer.size > 0 ? Math.round((transfer.receivedBytes / transfer.size) * 100) : 100;
+    if (isComplete || now - last > 60) {
+      this.lastProgressEmit.set(fileId, now);
+      const progressPercent = transfer.size > 0 
+        ? Math.round(((transfer.sentBytes || transfer.receivedBytes) / transfer.size) * 100) 
+        : 100;
 
       this._emitEvent('progress', {
         fileId,
         name: transfer.name,
         path: transfer.path,
-        direction: 'download',
-        receivedChunksCount: transfer.receivedChunksCount,
+        direction,
+        currentChunk: transfer.currentChunk || transfer.receivedChunksCount,
         totalChunks: transfer.totalChunks,
-        receivedBytes: transfer.receivedBytes,
+        sentBytes: transfer.sentBytes || 0,
+        receivedBytes: transfer.receivedBytes || 0,
         totalBytes: transfer.size,
         size: transfer.size,
         progressPercent: Math.min(progressPercent, 100)
       });
-
-      // Check if single file download is complete
-      if (transfer.receivedChunksCount === transfer.totalChunks && !transfer.isCompleted) {
-        transfer.isCompleted = true;
-        await this._finalizeFileDownload(fileId);
-      }
-    } catch (err) {
-      console.error(`[TransferManager] Decryption failed for chunk ${chunkIndex} of file ${fileId}. Key mismatch!`, err);
-      this._emitEvent('decryption-error', { fileId, error: 'Encryption key mismatch or corrupted chunk' });
     }
   }
 
   /**
-   * Finalize received file download, verify SHA-256 hash, and play success sound.
+   * Finalize received file, construct blob, and trigger completion chime.
    */
-  async _finalizeFileDownload(fileId) {
+  _finalizeFileDownload(fileId) {
     const transfer = this.incomingTransfers.get(fileId);
     if (!transfer) return;
 
-    // Combine decrypted chunks into a single Blob
-    const blob = new Blob(transfer.chunks, { type: transfer.type || 'application/zip' });
+    const blob = new Blob(transfer.chunks, { type: transfer.type || 'application/octet-stream' });
     const downloadUrl = URL.createObjectURL(blob);
     transfer.downloadUrl = downloadUrl;
-
-    // Compute SHA-256 verification if hash available
-    if (transfer.sha256) {
-      const fullBuffer = await blob.arrayBuffer();
-      const computedHash = await computeSHA256(fullBuffer);
-      transfer.sha256Match = (computedHash === transfer.sha256);
-      console.log(`[EncryptDrop Checksum] File ${transfer.name} SHA-256 Match:`, transfer.sha256Match);
-    }
 
     playCompleteChime();
     triggerHapticSuccess();
 
     this._emitEvent('file-complete', {
       fileId,
-      name: transfer.name,
-      path: transfer.path,
-      size: transfer.size,
-      type: transfer.type,
       downloadUrl,
-      sha256Match: transfer.sha256Match
+      name: transfer.name,
+      size: transfer.size
     });
   }
 
@@ -403,23 +403,22 @@ export class TransferManager {
     this._emitEvent('transfer-paused', { fileId });
   }
 
-  resumeTransfer(fileId, fromChunkIndex = 0, notifyPeer = true) {
+  resumeTransfer(fileId, fromChunkIndex = null, notifyPeer = true) {
     const outgoing = this.outgoingTransfers.get(fileId);
     if (outgoing) {
       outgoing.isPaused = false;
-      this.streamFile(fileId, fromChunkIndex || outgoing.currentChunk);
+      const targetChunk = fromChunkIndex !== null ? fromChunkIndex : outgoing.currentChunk;
+      this.streamFile(fileId, targetChunk);
     }
 
     const incoming = this.incomingTransfers.get(fileId);
-    if (incoming) {
-      incoming.isPaused = false;
-    }
+    if (incoming) incoming.isPaused = false;
 
     if (notifyPeer && this.webrtc) {
       this.webrtc.send(JSON.stringify({
         type: 'RESUME',
         fileId,
-        fromChunkIndex: outgoing ? outgoing.currentChunk : 0
+        fromChunkIndex: incoming ? incoming.receivedChunksCount : 0
       }));
     }
     this._emitEvent('transfer-resumed', { fileId });
@@ -432,7 +431,7 @@ export class TransferManager {
     const incoming = this.incomingTransfers.get(fileId);
     if (incoming) {
       incoming.isCanceled = true;
-      incoming.chunks = []; // Wipe RAM buffers
+      incoming.chunks = [];
     }
 
     if (notifyPeer && this.webrtc) {
@@ -441,19 +440,15 @@ export class TransferManager {
     this._emitEvent('transfer-canceled', { fileId });
   }
 
-  _waitForBufferLow() {
-    return new Promise((resolve) => {
-      if (!this.webrtc || this.webrtc.isBufferLow()) {
-        resolve();
-      } else {
-        const checkInterval = setInterval(() => {
-          if (!this.webrtc || this.webrtc.isBufferLow()) {
-            clearInterval(checkInterval);
-            resolve();
-          }
-        }, 20);
-      }
-    });
+  getTotalTransferredBytes() {
+    let total = 0;
+    for (const [, t] of this.outgoingTransfers) {
+      total += t.sentBytes || 0;
+    }
+    for (const [, t] of this.incomingTransfers) {
+      total += t.receivedBytes || 0;
+    }
+    return total;
   }
 
   on(event, callback) {
@@ -466,9 +461,6 @@ export class TransferManager {
     }
   }
 
-  /**
-   * Revoke all Blob URLs and purge memory buffers on session disconnect.
-   */
   clear() {
     for (const [, transfer] of this.incomingTransfers) {
       if (transfer.downloadUrl) {
@@ -478,6 +470,9 @@ export class TransferManager {
     }
     this.outgoingTransfers.clear();
     this.incomingTransfers.clear();
+    this.pendingOutgoingBatch = null;
+    this.pendingIncomingBatch = null;
+    this.lastProgressEmit.clear();
     this.callbacks = {};
   }
 }

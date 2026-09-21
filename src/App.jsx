@@ -3,8 +3,8 @@ import Navbar from './components/Navbar';
 import SessionPairing from './components/SessionPairing';
 import FileSelector from './components/FileSelector';
 import TransferProgress from './components/TransferProgress';
+import { FiDownload } from 'react-icons/fi';
 
-import { generateAESKey, exportKeyToHash, importKeyFromHash } from './services/crypto';
 import { signalingService } from './services/socketSignaling';
 import { WebRTCManager } from './services/webrtc';
 import { TransferManager } from './services/transferManager';
@@ -20,11 +20,17 @@ const generateSessionCode = () => {
   return code;
 };
 
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
 export default function App() {
   const [sessionId, setSessionId] = useState('');
   const [pairingUrl, setPairingUrl] = useState('');
-  const [cryptoKey, setCryptoKey] = useState(null);
-  const [keyHashStr, setKeyHashStr] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
   const [joinError, setJoinError] = useState('');
@@ -32,26 +38,29 @@ export default function App() {
   const [transfers, setTransfers] = useState([]);
   const [speedMbps, setSpeedMbps] = useState(0);
 
+  // App-Level Security: Transfer Approval state
+  const [incomingRequest, setIncomingRequest] = useState(null);
+  const [isWaitingApproval, setIsWaitingApproval] = useState(false);
+
   const webrtcRef = useRef(null);
   const transferManagerRef = useRef(null);
   const lastBytesRef = useRef(0);
   const speedIntervalRef = useRef(null);
   const disconnectTimerRef = useRef(null);
 
-  // Clean address bar (removes #key=... and ?session=... from browser bar without reload)
+  // Clean address bar (removes ?session=... from browser bar without reload)
   const cleanAddressBar = useCallback(() => {
-    if (window.location.hash.includes('key=') || window.location.search.includes('session=')) {
+    if (window.location.search.includes('session=')) {
       window.history.replaceState(null, '', window.location.pathname);
     }
   }, []);
 
   // Save active session to sessionStorage for seamless refresh reconnection
-  const saveSessionToStorage = (sid, keyStr, isHost) => {
+  const saveSessionToStorage = (sid, isHost) => {
     try {
       if (sid) {
         sessionStorage.setItem('encryptdrop_active_session', JSON.stringify({
           sessionId: sid,
-          keyHash: keyStr || '',
           isHost: !!isHost,
           savedAt: Date.now()
         }));
@@ -70,51 +79,26 @@ export default function App() {
   };
 
   // Initialize or Host a Session Room
-  const handleHostSession = useCallback(async (existingId = null, existingKeyHash = null) => {
+  const handleHostSession = useCallback(async (existingId = null) => {
     setIsJoining(false);
     setJoinError('');
     const newSessionId = existingId || generateSessionCode();
     setSessionId(newSessionId);
 
-    let key = null;
-    let keyHash = existingKeyHash || '';
-
-    if (existingKeyHash) {
-      try {
-        key = await importKeyFromHash(existingKeyHash);
-      } catch (err) {
-        console.warn('[EncryptDrop] Failed to import existing key hash:', err);
-      }
-    }
-
-    if (!key) {
-      key = await generateAESKey();
-      keyHash = await exportKeyToHash(key);
-    }
-
-    setCryptoKey(key);
-    setKeyHashStr(keyHash);
-
-    const fullUrl = `${window.location.origin}${window.location.pathname}?session=${newSessionId}#key=${keyHash}`;
+    // Clean, short URL without long cryptographic hashes
+    const fullUrl = `${window.location.origin}${window.location.pathname}?session=${newSessionId}`;
     setPairingUrl(fullUrl);
 
     // Save session memory
-    saveSessionToStorage(newSessionId, keyHash, true);
+    saveSessionToStorage(newSessionId, true);
 
     cleanAddressBar();
-    initP2P(newSessionId, key, true, keyHash);
+    initP2P(newSessionId, true);
   }, [cleanAddressBar]);
 
   // Join an Existing Session Room
-  const handleJoinSession = useCallback(async (targetInput, directKeyHash = null) => {
+  const handleJoinSession = useCallback(async (targetInput) => {
     let targetSessionId = targetInput ? targetInput.trim() : '';
-    let keyHash = directKeyHash || '';
-
-    if (targetInput.includes('key=')) {
-      keyHash = targetInput.split('key=')[1].split('&')[0];
-    } else if (window.location.hash.includes('key=')) {
-      keyHash = window.location.hash.split('key=')[1].split('&')[0];
-    }
 
     if (targetInput.includes('session=')) {
       try {
@@ -132,22 +116,11 @@ export default function App() {
     setJoinError('');
     setConnectionState('Connecting...');
 
-    let key = null;
-    if (keyHash) {
-      try {
-        key = await importKeyFromHash(keyHash);
-        setCryptoKey(key);
-        setKeyHashStr(keyHash);
-      } catch (err) {
-        console.warn('[EncryptDrop] Could not parse key from hash, waiting for host key-sync:', err);
-      }
-    }
-
     // Save session memory
-    saveSessionToStorage(targetSessionId, keyHash, false);
+    saveSessionToStorage(targetSessionId, false);
 
     cleanAddressBar();
-    initP2P(targetSessionId, key, false, keyHash);
+    initP2P(targetSessionId, false);
   }, [cleanAddressBar]);
 
   const handleCancelJoin = () => {
@@ -194,14 +167,13 @@ export default function App() {
       const stored = sessionStorage.getItem('encryptdrop_active_session');
       if (stored) {
         const parsed = JSON.parse(stored);
-        // Valid if within 10 minutes
         if (parsed.sessionId && Date.now() - (parsed.savedAt || 0) < 10 * 60 * 1000) {
           console.log('[EncryptDrop App] Auto-reconnecting restored session:', parsed.sessionId);
           if (parsed.isHost) {
-            handleHostSession(parsed.sessionId, parsed.keyHash);
+            handleHostSession(parsed.sessionId);
             return;
           } else {
-            handleJoinSession(parsed.sessionId, parsed.keyHash);
+            handleJoinSession(parsed.sessionId);
             return;
           }
         }
@@ -215,7 +187,7 @@ export default function App() {
   }, []);
 
   // Setup WebRTC and Socket Signaling
-  const initP2P = (roomSessionId, key, isHost, hostKeyHash) => {
+  const initP2P = (roomSessionId, isHost) => {
     if (disconnectTimerRef.current) {
       clearTimeout(disconnectTimerRef.current);
       disconnectTimerRef.current = null;
@@ -227,7 +199,7 @@ export default function App() {
     const webrtc = new WebRTCManager();
     webrtcRef.current = webrtc;
 
-    const transferManager = new TransferManager(webrtc, key);
+    const transferManager = new TransferManager(webrtc);
     transferManagerRef.current = transferManager;
 
     // Dynamically connect to signaling server (Vercel env or local host IP fallback)
@@ -258,18 +230,12 @@ export default function App() {
     });
 
     signalingService.on('peer-joined', async () => {
-      console.log('[EncryptDrop App] Peer joined room! Syncing key & Creating SDP offer...');
-      if (hostKeyHash) {
-        signalingService.sendSignal({ type: 'key-sync', keyHash: hostKeyHash });
-      }
-
+      console.log('[EncryptDrop App] Peer joined room! Creating SDP offer...');
       webrtc.createDataChannel('encryptdrop-data');
       const offer = await webrtc.createOffer();
       signalingService.sendSignal({ type: 'offer', offer });
     });
 
-    // Handle peer left with explicit check:
-    // If WebRTC DataChannel is actively OPEN, do NOT disconnect on temporary socket hiccups
     signalingService.on('peer-left', ({ explicit }) => {
       console.log('[EncryptDrop App] Signaling peer-left received. Explicit:', explicit);
       if (webrtc.dataChannel && webrtc.dataChannel.readyState === 'open' && !explicit) {
@@ -281,16 +247,7 @@ export default function App() {
     });
 
     signalingService.on('signal', async ({ signalData }) => {
-      if (signalData.type === 'key-sync' && signalData.keyHash) {
-        console.log('[EncryptDrop App] Received key-sync from Host:', signalData.keyHash);
-        const importedKey = await importKeyFromHash(signalData.keyHash);
-        setCryptoKey(importedKey);
-        setKeyHashStr(signalData.keyHash);
-        saveSessionToStorage(roomSessionId, signalData.keyHash, isHost);
-        if (transferManagerRef.current) {
-          transferManagerRef.current.setCryptoKey(importedKey);
-        }
-      } else if (signalData.type === 'offer') {
+      if (signalData.type === 'offer') {
         const answer = await webrtc.handleOfferAndCreateAnswer(signalData.offer);
         signalingService.sendSignal({ type: 'answer', answer });
       } else if (signalData.type === 'answer') {
@@ -331,8 +288,6 @@ export default function App() {
         }
         setConnectionState('Connected');
       } else if (state === 'disconnected') {
-        // Temporary interruption (e.g. mobile photo picker opened in background)
-        // Give it 15 seconds to self-heal before considering it dead
         setConnectionState('Reconnecting...');
         if (!disconnectTimerRef.current) {
           disconnectTimerRef.current = setTimeout(() => {
@@ -352,6 +307,25 @@ export default function App() {
           cleanupAndResetSession(true);
         }
       }
+    });
+
+    // App-Level Security: Transfer Approval Events
+    transferManager.on('incoming-request', (data) => {
+      console.log('[EncryptDrop App] Received incoming transfer request:', data);
+      setIncomingRequest(data);
+    });
+
+    transferManager.on('waiting-approval', () => {
+      setIsWaitingApproval(true);
+    });
+
+    transferManager.on('transfer-accepted', () => {
+      setIsWaitingApproval(false);
+    });
+
+    transferManager.on('transfer-rejected', () => {
+      setIsWaitingApproval(false);
+      alert('File transfer request was declined by the recipient.');
     });
 
     // Transfer Progress Events
@@ -384,11 +358,11 @@ export default function App() {
       ]);
     });
 
-    transferManager.on('file-complete', ({ fileId, downloadUrl, sha256Match }) => {
+    transferManager.on('file-complete', ({ fileId, downloadUrl }) => {
       setTransfers((prev) =>
         prev.map((t) =>
           t.fileId === fileId
-            ? { ...t, isCompleted: true, progressPercent: 100, downloadUrl, sha256Match }
+            ? { ...t, isCompleted: true, progressPercent: 100, downloadUrl }
             : t
         )
       );
@@ -414,10 +388,10 @@ export default function App() {
     if (!transferManagerRef.current || !isConnected) return;
 
     try {
-      const items = await transferManagerRef.current.prepareFiles(fileList);
+      const manifest = await transferManagerRef.current.buildFolderManifest(fileList);
       setTransfers((prev) => [
         ...prev,
-        ...items.map((item) => ({
+        ...manifest.map((item) => ({
           fileId: item.fileId,
           name: item.name,
           size: item.size,
@@ -431,10 +405,25 @@ export default function App() {
         }))
       ]);
 
-      await transferManagerRef.current.sendFiles(items);
+      await transferManagerRef.current.requestSendFiles(fileList);
     } catch (err) {
-      console.error('[EncryptDrop App] Error sending files:', err);
+      console.error('[EncryptDrop App] Error initiating file transfer:', err);
     }
+  };
+
+  // Transfer Approval Actions
+  const handleAcceptTransfer = (batchId) => {
+    if (transferManagerRef.current) {
+      transferManagerRef.current.acceptTransfer(batchId);
+    }
+    setIncomingRequest(null);
+  };
+
+  const handleRejectTransfer = (batchId) => {
+    if (transferManagerRef.current) {
+      transferManagerRef.current.rejectTransfer(batchId);
+    }
+    setIncomingRequest(null);
   };
 
   const handlePause = (fileId) => {
@@ -479,6 +468,8 @@ export default function App() {
     setIsConnected(false);
     setIsJoining(false);
     setJoinError('');
+    setIncomingRequest(null);
+    setIsWaitingApproval(false);
     setConnectionState('Disconnected');
     setTransfers([]);
     setSpeedMbps(0);
@@ -523,6 +514,15 @@ export default function App() {
         {isConnected && (
           <>
             <FileSelector onSendFiles={handleSendFiles} isConnected={isConnected} />
+
+            {/* Waiting for Recipient Approval Banner */}
+            {isWaitingApproval && (
+              <div className="max-w-md mx-auto p-3.5 bg-sky-500/10 border border-sky-500/30 rounded-xl text-sky-300 text-xs flex items-center justify-center space-x-2.5 animate-pulse">
+                <span className="w-2 h-2 rounded-full bg-sky-400" />
+                <span>Waiting for recipient to accept file transfer...</span>
+              </div>
+            )}
+
             <TransferProgress
               transfers={transfers}
               onPause={handlePause}
@@ -533,6 +533,49 @@ export default function App() {
           </>
         )}
       </main>
+
+      {/* Quick Share / AirDrop Style Transfer Approval Modal */}
+      {incomingRequest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#121824] border border-slate-700/80 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-5">
+            <div className="flex items-center space-x-3.5">
+              <div className="w-12 h-12 rounded-xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 shrink-0">
+                <FiDownload className="w-6 h-6" />
+              </div>
+              <div className="space-y-0.5">
+                <h3 className="text-base font-semibold text-slate-100">Incoming File Transfer</h3>
+                <p className="text-xs text-slate-400">
+                  {incomingRequest.files.length} file{incomingRequest.files.length > 1 ? 's' : ''} • {formatBytes(incomingRequest.totalSize)}
+                </p>
+              </div>
+            </div>
+
+            <div className="max-h-44 overflow-y-auto space-y-2 pr-1 bg-[#0b0f17] p-3.5 rounded-xl border border-slate-800">
+              {incomingRequest.files.map((f, idx) => (
+                <div key={idx} className="flex items-center justify-between text-xs py-1 first:pt-0 last:pb-0">
+                  <span className="text-slate-200 truncate max-w-[220px] font-medium">{f.name}</span>
+                  <span className="text-slate-500 font-mono text-[11px] shrink-0 ml-2">{formatBytes(f.size)}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center space-x-3 pt-1">
+              <button
+                onClick={() => handleRejectTransfer(incomingRequest.batchId)}
+                className="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl transition-colors"
+              >
+                Decline
+              </button>
+              <button
+                onClick={() => handleAcceptTransfer(incomingRequest.batchId)}
+                className="flex-1 py-2.5 px-4 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-xl transition-colors shadow-lg shadow-sky-600/20"
+              >
+                Accept & Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
