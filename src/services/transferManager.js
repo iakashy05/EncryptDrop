@@ -243,6 +243,15 @@ export class TransferManager {
         this._emitThrottledProgress(fileId, transfer, 'upload');
       }
     }
+
+    if (transfer.currentChunk >= transfer.totalChunks && !transfer.isCompleted) {
+      transfer.isCompleted = true;
+      this._emitEvent('file-complete', {
+        fileId,
+        name: transfer.name,
+        size: transfer.size
+      });
+    }
   }
 
   /**

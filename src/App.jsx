@@ -3,6 +3,7 @@ import Navbar from './components/Navbar';
 import SessionPairing from './components/SessionPairing';
 import FileSelector from './components/FileSelector';
 import TransferProgress from './components/TransferProgress';
+import Footer from './components/Footer';
 import { FiDownload } from 'react-icons/fi';
 
 import { signalingService } from './services/socketSignaling';
@@ -315,8 +316,28 @@ export default function App() {
       setIncomingRequest(data);
     });
 
-    transferManager.on('waiting-approval', () => {
+    transferManager.on('waiting-approval', ({ files }) => {
       setIsWaitingApproval(true);
+      if (files && files.length > 0) {
+        setTransfers((prev) => {
+          const existingIds = new Set(prev.map((t) => t.fileId));
+          const newItems = files
+            .filter((item) => !existingIds.has(item.fileId))
+            .map((item) => ({
+              fileId: item.fileId,
+              name: item.name,
+              size: item.size,
+              direction: 'upload',
+              sentBytes: 0,
+              totalBytes: item.size,
+              progressPercent: 0,
+              isPaused: false,
+              isCompleted: false,
+              isCanceled: false
+            }));
+          return [...prev, ...newItems];
+        });
+      }
     });
 
     transferManager.on('transfer-accepted', () => {
@@ -387,23 +408,6 @@ export default function App() {
     if (!transferManagerRef.current || !isConnected) return;
 
     try {
-      const manifest = await transferManagerRef.current.buildFolderManifest(fileList);
-      setTransfers((prev) => [
-        ...prev,
-        ...manifest.map((item) => ({
-          fileId: item.fileId,
-          name: item.name,
-          size: item.size,
-          direction: 'upload',
-          sentBytes: 0,
-          totalBytes: item.size,
-          progressPercent: 0,
-          isPaused: false,
-          isCompleted: false,
-          isCanceled: false
-        }))
-      ]);
-
       await transferManagerRef.current.requestSendFiles(fileList);
     } catch (err) {
       console.error('[EncryptDrop App] Error initiating file transfer:', err);
@@ -490,53 +494,57 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0f17] text-slate-100 pb-12 flex flex-col font-sans">
+    <div className="min-h-screen doodle-bg text-slate-100 flex flex-col font-sans relative selection:bg-sky-500/20 overflow-x-hidden">
       <Navbar
         connectionState={connectionState}
         isConnected={isConnected}
         onEndSession={handleEndSession}
       />
 
-      <main className="flex-1 px-4 py-6 max-w-5xl mx-auto w-full space-y-6">
-        {!isConnected && (
-          <SessionPairing
-            sessionId={sessionId}
-            pairingUrl={pairingUrl}
-            isJoining={isJoining}
-            joinError={joinError}
-            onHostSession={handleHostSession}
-            onJoinSession={handleJoinSession}
-            onCancelJoin={handleCancelJoin}
-          />
-        )}
-
-        {isConnected && (
-          <>
-            <FileSelector onSendFiles={handleSendFiles} isConnected={isConnected} />
-
-            {/* Waiting for Recipient Approval Banner */}
-            {isWaitingApproval && (
-              <div className="max-w-md mx-auto p-3.5 bg-sky-500/10 border border-sky-500/30 rounded-xl text-sky-300 text-xs flex items-center justify-center space-x-2.5 animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-sky-400" />
-                <span>Waiting for recipient to accept file transfer...</span>
-              </div>
-            )}
-
-            <TransferProgress
-              transfers={transfers}
-              onPause={handlePause}
-              onResume={handleResume}
-              onCancel={handleCancel}
-              speedMbps={speedMbps}
+      <main className="flex-1 flex flex-col justify-center items-center w-full px-4 py-8 sm:py-12 z-10">
+        <div className="w-full max-w-md mx-auto flex flex-col items-center justify-center space-y-6">
+          {!isConnected && (
+            <SessionPairing
+              sessionId={sessionId}
+              pairingUrl={pairingUrl}
+              isJoining={isJoining}
+              joinError={joinError}
+              onHostSession={handleHostSession}
+              onJoinSession={handleJoinSession}
+              onCancelJoin={handleCancelJoin}
             />
-          </>
-        )}
+          )}
+
+          {isConnected && (
+            <>
+              <FileSelector onSendFiles={handleSendFiles} isConnected={isConnected} />
+
+              {/* Waiting for Recipient Approval Banner */}
+              {isWaitingApproval && (
+                <div className="w-full p-4 bg-sky-500/10 border border-sky-500/30 rounded-2xl text-sky-300 text-xs flex items-center justify-center space-x-2.5 animate-pulse shadow-sm">
+                  <span className="w-2 h-2 rounded-full bg-sky-400" />
+                  <span>Waiting for recipient to accept file transfer...</span>
+                </div>
+              )}
+
+              <TransferProgress
+                transfers={transfers}
+                onPause={handlePause}
+                onResume={handleResume}
+                onCancel={handleCancel}
+                speedMbps={speedMbps}
+              />
+            </>
+          )}
+        </div>
       </main>
+
+      <Footer />
 
       {/* Quick Share / AirDrop Style Transfer Approval Modal */}
       {incomingRequest && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-[#121824] border border-slate-700/80 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-[#121824]/95 backdrop-blur-md border border-slate-700/80 rounded-2xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-5">
             <div className="flex items-center space-x-3.5">
               <div className="w-12 h-12 rounded-xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 shrink-0">
                 <FiDownload className="w-6 h-6" />
@@ -561,13 +569,13 @@ export default function App() {
             <div className="flex items-center space-x-3 pt-1">
               <button
                 onClick={() => handleRejectTransfer(incomingRequest.batchId)}
-                className="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl transition-colors"
+                className="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl transition-all active:scale-95 shadow-sm"
               >
                 Decline
               </button>
               <button
                 onClick={() => handleAcceptTransfer(incomingRequest.batchId)}
-                className="flex-1 py-2.5 px-4 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-xl transition-colors shadow-lg shadow-sky-600/20"
+                className="flex-1 py-2.5 px-4 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-xl transition-all active:scale-95 shadow-lg shadow-sky-600/20"
               >
                 Accept & Download
               </button>

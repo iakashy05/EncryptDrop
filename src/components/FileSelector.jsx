@@ -59,13 +59,13 @@ export default function FileSelector({ onSendFiles, isConnected }) {
   };
 
   return (
-    <div className="max-w-xl mx-auto mt-6 bg-[#121824] border border-slate-800 rounded-xl p-5 shadow-xl space-y-4">
+    <div className="w-full max-w-md mx-auto bg-[#121824]/90 backdrop-blur-md border border-slate-800/80 rounded-2xl p-5 sm:p-7 shadow-2xl space-y-5">
       {/* Dropzone Container */}
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className={`border border-dashed rounded-lg p-8 text-center transition-colors flex flex-col items-center justify-center cursor-pointer ${
+        className={`border border-dashed rounded-xl p-6 sm:p-8 text-center transition-all flex flex-col items-center justify-center cursor-pointer ${
           isDragOver
             ? 'border-sky-500 bg-sky-500/5'
             : 'border-slate-800 hover:border-slate-700 bg-[#0b0f17]'
@@ -79,7 +79,7 @@ export default function FileSelector({ onSendFiles, isConnected }) {
           Drag & Drop Files or Folders
         </h3>
         <p className="text-xs text-slate-500 mb-5 max-w-xs">
-          Uncompressed, 100% bit-exact P2P file teleportation.
+          Uncompressed, 100% bit-exact direct P2P file teleportation.
         </p>
 
         {/* Hidden inputs */}
@@ -105,7 +105,7 @@ export default function FileSelector({ onSendFiles, isConnected }) {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-md text-xs font-medium transition-colors"
+            className="flex items-center space-x-1.5 px-3.5 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-medium transition-all active:scale-95 shadow-sm shadow-sky-600/20"
           >
             <FiFilePlus className="w-3.5 h-3.5" />
             <span>Select Files</span>
@@ -114,7 +114,7 @@ export default function FileSelector({ onSendFiles, isConnected }) {
           <button
             type="button"
             onClick={() => folderInputRef.current?.click()}
-            className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-md text-xs font-medium transition-colors"
+            className="flex items-center space-x-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl text-xs font-medium transition-all active:scale-95 shadow-sm"
           >
             <FiFolderPlus className="w-3.5 h-3.5" />
             <span>Select Folder</span>
@@ -138,11 +138,11 @@ export default function FileSelector({ onSendFiles, isConnected }) {
             </button>
           </div>
 
-          <div className="max-h-40 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+          <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
             {selectedFiles.map((file, idx) => (
               <div
                 key={idx}
-                className="flex items-center justify-between p-2 bg-[#0b0f17] border border-slate-800/80 rounded-md text-xs"
+                className="flex items-center justify-between p-2.5 bg-[#0b0f17] border border-slate-800/80 rounded-xl text-xs"
               >
                 <div className="flex items-center space-x-2 truncate pr-2">
                   <span className="truncate text-slate-200">
@@ -165,7 +165,7 @@ export default function FileSelector({ onSendFiles, isConnected }) {
           <button
             onClick={handleSend}
             disabled={!isConnected}
-            className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-medium rounded-md text-xs flex items-center justify-center space-x-2 transition-colors"
+            className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-medium rounded-xl text-xs flex items-center justify-center space-x-2 transition-all active:scale-95 shadow-sm shadow-sky-600/20"
           >
             <FiSend className="w-3.5 h-3.5" />
             <span>{isConnected ? 'Send Files' : 'Waiting for Peer...'}</span>

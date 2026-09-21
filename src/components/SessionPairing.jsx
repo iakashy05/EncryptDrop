@@ -99,7 +99,7 @@ export default function SessionPairing({
   // 1. DEDICATED CONNECTING VIEW (When joining via QR scan or URL)
   if (isJoining) {
     return (
-      <div className="max-w-md mx-auto mt-6 p-8 bg-[#121824] border border-slate-800 rounded-2xl shadow-2xl flex flex-col items-center text-center space-y-6">
+      <div className="w-full max-w-md mx-auto p-6 sm:p-8 bg-[#121824]/90 backdrop-blur-md border border-slate-800/80 rounded-2xl shadow-2xl flex flex-col items-center text-center space-y-6">
         <div className="relative flex items-center justify-center my-2">
           <div className="w-16 h-16 rounded-full bg-sky-500/10 border border-sky-500/30 flex items-center justify-center animate-pulse">
             <FiShield className="w-7 h-7 text-sky-400" />
@@ -111,13 +111,13 @@ export default function SessionPairing({
           <h3 className="text-base font-semibold text-slate-100">
             Connecting to Room
           </h3>
-          <div className="inline-block px-4 py-1.5 bg-[#0b0f17] border border-slate-700/60 rounded-lg shadow-inner">
+          <div className="inline-block px-4 py-1.5 bg-[#0b0f17] border border-slate-700/60 rounded-xl shadow-inner">
             <span className="font-mono text-xl font-bold tracking-[0.25em] text-sky-400">
               {sessionId || '------'}
             </span>
           </div>
           <p className="text-xs text-slate-400 max-w-xs mx-auto pt-1">
-            Establishing secure end-to-end encrypted connection with peer...
+            Establishing direct peer-to-peer connection with peer...
           </p>
         </div>
 
@@ -141,7 +141,7 @@ export default function SessionPairing({
 
   // 2. STANDARD PAIRING VIEW (Share / Join Tabs)
   return (
-    <div className="max-w-md mx-auto mt-6 p-6 bg-[#121824] border border-slate-800 rounded-2xl shadow-xl space-y-6">
+    <div className="w-full max-w-md mx-auto p-5 sm:p-7 bg-[#121824]/90 backdrop-blur-md border border-slate-800/80 rounded-2xl shadow-2xl space-y-6">
       {/* Header Tabs */}
       <div className="flex bg-[#0b0f17] p-1 rounded-xl border border-slate-800">
         <button
@@ -172,9 +172,9 @@ export default function SessionPairing({
       {activeTab === 'share' && (
         <div className="flex flex-col items-center text-center space-y-5">
           {/* High-Contrast Crisp QR Code */}
-          <div className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-sm">
+          <div className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-center max-w-full">
             {pairingUrl ? (
-              <QRCodeSVG value={pairingUrl} size={180} level="M" includeMargin={false} />
+              <QRCodeSVG value={pairingUrl} size={170} level="M" includeMargin={false} className="max-w-full h-auto" />
             ) : (
               <div className="w-44 h-44 flex items-center justify-center text-slate-400 text-xs">
                 Generating room...
@@ -203,7 +203,7 @@ export default function SessionPairing({
             <div className="flex items-center space-x-2 w-full pt-1">
               <button
                 onClick={handleCopyCode}
-                className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 bg-slate-800/80 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors border border-slate-700/50"
+                className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 bg-slate-800/80 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium transition-all border border-slate-700/50 active:scale-95 shadow-sm"
                 title="Copy 6-character code"
               >
                 {copiedCode ? <FiCheck className="w-3.5 h-3.5 text-emerald-400" /> : <FiCopy className="w-3.5 h-3.5 text-slate-400" />}
@@ -212,7 +212,7 @@ export default function SessionPairing({
 
               <button
                 onClick={handleCopyLink}
-                className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 bg-slate-800/80 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors border border-slate-700/50"
+                className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 bg-slate-800/80 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium transition-all border border-slate-700/50 active:scale-95 shadow-sm"
                 title="Copy share link"
               >
                 {copiedLink ? <FiCheck className="w-3.5 h-3.5 text-emerald-400" /> : <FiLink className="w-3.5 h-3.5 text-slate-400" />}

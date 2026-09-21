@@ -11,17 +11,17 @@ export default function TransferProgress({
   if (!transfers || transfers.length === 0) return null;
 
   return (
-    <div className="max-w-xl mx-auto mt-5 space-y-3">
+    <div className="w-full max-w-md mx-auto space-y-3">
       <div className="flex items-center justify-between text-xs font-medium text-slate-400 px-1">
         <span>Active Transfers ({transfers.length})</span>
         {speedMbps > 0 && (
-          <span className="text-sky-400 font-mono text-[11px] bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 rounded-md">
+          <span className="text-sky-400 font-mono text-[11px] bg-sky-500/10 border border-sky-500/20 px-2.5 py-0.5 rounded-xl">
             {speedMbps.toFixed(2)} MB/s
           </span>
         )}
       </div>
 
-      <div className="space-y-2.5">
+      <div className="space-y-3">
         {transfers.map((item) => {
           const isUpload = item.direction === 'upload';
           const isCompleted = Boolean(item.isCompleted || item.progressPercent >= 100);
@@ -36,12 +36,12 @@ export default function TransferProgress({
           return (
             <div
               key={item.fileId}
-              className="bg-[#121824] border border-slate-800 rounded-lg p-3.5 space-y-2.5 shadow-sm"
+              className="bg-[#121824]/90 backdrop-blur-md border border-slate-800/80 rounded-2xl p-4 sm:p-5 space-y-3 shadow-xl"
             >
               {/* File Title & Direction */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2.5 truncate pr-3">
-                  <div className={`p-1.5 rounded-md ${
+                  <div className={`p-1.5 rounded-xl ${
                     isCompleted 
                       ? 'bg-emerald-500/10 text-emerald-400' 
                       : isUpload 
@@ -74,7 +74,7 @@ export default function TransferProgress({
                       {item.isPaused ? (
                         <button
                           onClick={() => onResume(item.fileId)}
-                          className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md text-xs transition-colors"
+                          className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs transition-all active:scale-95 shadow-sm"
                           title="Resume"
                         >
                           <FiPlay className="w-3.5 h-3.5" />
@@ -82,7 +82,7 @@ export default function TransferProgress({
                       ) : (
                         <button
                           onClick={() => onPause(item.fileId)}
-                          className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md text-xs transition-colors"
+                          className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs transition-all active:scale-95 shadow-sm"
                           title="Pause"
                         >
                           <FiPause className="w-3.5 h-3.5" />
@@ -91,7 +91,7 @@ export default function TransferProgress({
 
                       <button
                         onClick={() => onCancel(item.fileId)}
-                        className="p-1.5 bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 rounded-md text-xs transition-colors"
+                        className="p-1.5 bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 rounded-xl text-xs transition-all active:scale-95 shadow-sm"
                         title="Cancel"
                       >
                         <FiX className="w-3.5 h-3.5" />
@@ -110,7 +110,7 @@ export default function TransferProgress({
                           alert('File is finalizing in browser RAM. Please try again in 1 second.');
                         }
                       }}
-                      className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-md text-xs font-medium transition-colors"
+                      className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-xl text-xs font-medium transition-all active:scale-95 shadow-sm"
                     >
                       <FiDownload className="w-3.5 h-3.5" />
                       <span>Save File</span>
@@ -119,7 +119,7 @@ export default function TransferProgress({
 
                   {/* Sender Completed Badge */}
                   {isCompleted && isUpload && (
-                    <div className="flex items-center space-x-1 px-2.5 py-1 bg-emerald-500/10 text-emerald-400 rounded-md text-xs font-medium border border-emerald-500/20">
+                    <div className="flex items-center space-x-1 px-2.5 py-1 bg-emerald-500/10 text-emerald-400 rounded-xl text-xs font-medium border border-emerald-500/20 shadow-sm">
                       <FiCheck className="w-3.5 h-3.5" />
                       <span>Sent</span>
                     </div>
