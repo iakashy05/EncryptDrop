@@ -10,12 +10,24 @@ import { WebRTCManager } from './services/webrtc';
 import { TransferManager } from './services/transferManager';
 import { playConnectChime, playDisconnectChime, triggerHapticSuccess } from './services/audioHaptics';
 
+// Clean 6-character uppercase alphanumeric code (unambiguous charset)
+const generateSessionCode = () => {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+};
+
 export default function App() {
   const [sessionId, setSessionId] = useState('');
   const [pairingUrl, setPairingUrl] = useState('');
   const [cryptoKey, setCryptoKey] = useState(null);
   const [keyHashStr, setKeyHashStr] = useState('');
   const [isConnected, setIsConnected] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
+  const [joinError, setJoinError] = useState('');
   const [connectionState, setConnectionState] = useState('Disconnected');
   const [transfers, setTransfers] = useState([]);
   const [speedMbps, setSpeedMbps] = useState(0);
@@ -25,16 +37,18 @@ export default function App() {
   const lastBytesRef = useRef(0);
   const speedIntervalRef = useRef(null);
 
-  // Clean address bar (removes #key=... after importing key into RAM)
+  // Clean address bar (removes #key=... and ?session=... from browser bar without reload)
   const cleanAddressBar = useCallback(() => {
-    if (window.location.hash.includes('key=')) {
+    if (window.location.hash.includes('key=') || window.location.search.includes('session=')) {
       window.history.replaceState(null, '', window.location.pathname);
     }
   }, []);
 
   // Initialize or Host a Session Room
   const handleHostSession = useCallback(async () => {
-    const newSessionId = `encryptdrop_${Math.random().toString(36).substring(2, 8)}`;
+    setIsJoining(false);
+    setJoinError('');
+    const newSessionId = generateSessionCode();
     setSessionId(newSessionId);
 
     // Generate AES key and export to Hash
@@ -55,7 +69,7 @@ export default function App() {
 
   // Join an Existing Session Room
   const handleJoinSession = useCallback(async (targetInput) => {
-    let targetSessionId = targetInput;
+    let targetSessionId = targetInput ? targetInput.trim() : '';
     let keyHash = '';
 
     // If input is full URL or contains hash
@@ -66,17 +80,30 @@ export default function App() {
     }
 
     if (targetInput.includes('session=')) {
-      const urlObj = new URL(targetInput);
-      targetSessionId = urlObj.searchParams.get('session') || targetInput;
+      try {
+        const urlObj = new URL(targetInput.startsWith('http') ? targetInput : `https://${targetInput}`);
+        targetSessionId = urlObj.searchParams.get('session') || targetSessionId;
+      } catch {
+        const match = targetInput.match(/session=([A-Za-z0-9]+)/);
+        if (match) targetSessionId = match[1];
+      }
     }
 
+    targetSessionId = targetSessionId.toUpperCase().replace(/[^A-Z0-9]/g, '');
     setSessionId(targetSessionId);
+    setIsJoining(true);
+    setJoinError('');
+    setConnectionState('Connecting...');
 
     let key = null;
     if (keyHash) {
-      key = await importKeyFromHash(keyHash);
-      setCryptoKey(key);
-      setKeyHashStr(keyHash);
+      try {
+        key = await importKeyFromHash(keyHash);
+        setCryptoKey(key);
+        setKeyHashStr(keyHash);
+      } catch (err) {
+        console.warn('[EncryptDrop] Could not parse key from hash, waiting for host key-sync:', err);
+      }
     }
 
     cleanAddressBar();
@@ -84,11 +111,21 @@ export default function App() {
     initP2P(targetSessionId, key, false, keyHash);
   }, [cleanAddressBar]);
 
+  const handleCancelJoin = () => {
+    setIsJoining(false);
+    setJoinError('');
+    if (webrtcRef.current) webrtcRef.current.close();
+    signalingService.disconnect();
+    window.history.replaceState(null, '', window.location.pathname);
+    handleHostSession();
+  };
+
   // Read URL params on page load for one-click QR join
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const sessionParam = params.get('session');
     if (sessionParam) {
+      setIsJoining(true);
       handleJoinSession(sessionParam);
     } else {
       handleHostSession();
@@ -122,6 +159,17 @@ export default function App() {
     }
 
     // Signaling Callbacks
+    signalingService.on('room-error', ({ message }) => {
+      console.warn('[EncryptDrop App] Room error from signaling:', message);
+      setJoinError(message || 'Room not found or expired.');
+      setConnectionState('Error');
+    });
+
+    signalingService.on('room-joined', () => {
+      console.log('[EncryptDrop App] Joined signaling room, waiting for peer...');
+      setConnectionState('Connecting to Peer...');
+    });
+
     signalingService.on('peer-joined', async () => {
       console.log('[EncryptDrop App] Peer joined room! Syncing key & Creating SDP offer...');
       if (hostKeyHash) {
@@ -163,6 +211,8 @@ export default function App() {
     webrtc.on('channel-open', () => {
       console.log('[EncryptDrop App] DataChannel Connected & Ready!');
       setIsConnected(true);
+      setIsJoining(false);
+      setJoinError('');
       setConnectionState('Connected');
       playConnectChime();
       triggerHapticSuccess();
@@ -297,11 +347,12 @@ export default function App() {
     if (speedIntervalRef.current) clearInterval(speedIntervalRef.current);
 
     setIsConnected(false);
+    setIsJoining(false);
+    setJoinError('');
     setConnectionState('Disconnected');
     setTransfers([]);
     setSpeedMbps(0);
-    window.location.search = '';
-    window.location.hash = '';
+    window.history.replaceState(null, '', window.location.pathname);
 
     handleHostSession();
   };
@@ -327,8 +378,11 @@ export default function App() {
           <SessionPairing
             sessionId={sessionId}
             pairingUrl={pairingUrl}
+            isJoining={isJoining}
+            joinError={joinError}
             onHostSession={handleHostSession}
             onJoinSession={handleJoinSession}
+            onCancelJoin={handleCancelJoin}
           />
         )}
 

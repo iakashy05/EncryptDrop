@@ -1,7 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { BrowserQRCodeReader } from '@zxing/browser';
-import { FiMaximize, FiCamera, FiCopy, FiCheck, FiArrowRight, FiAlertCircle } from 'react-icons/fi';
+import {
+  FiShare2,
+  FiLogIn,
+  FiCopy,
+  FiCheck,
+  FiLink,
+  FiArrowRight,
+  FiAlertCircle,
+  FiShield,
+  FiRefreshCw
+} from 'react-icons/fi';
 
 /**
  * Robust clipboard copy with fallback for all browser contexts (HTTP / HTTPS / mobile).
@@ -18,7 +27,6 @@ async function copyTextToClipboard(textToCopy) {
     console.warn('[Clipboard] Navigator clipboard failed, using fallback:', err);
   }
 
-  // Fallback for HTTP / unsupported contexts
   try {
     const textarea = document.createElement('textarea');
     textarea.value = textToCopy;
@@ -37,63 +45,48 @@ async function copyTextToClipboard(textToCopy) {
   }
 }
 
-export default function SessionPairing({ sessionId, pairingUrl, onJoinSession, onHostSession }) {
-  const [activeTab, setActiveTab] = useState('host'); // 'host' | 'join'
+export default function SessionPairing({
+  sessionId,
+  pairingUrl,
+  isJoining,
+  joinError,
+  onJoinSession,
+  onHostSession,
+  onCancelJoin
+}) {
+  const [activeTab, setActiveTab] = useState('share'); // 'share' | 'join'
   const [manualCode, setManualCode] = useState('');
-  const [copiedSid, setCopiedSid] = useState(false);
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanError, setScanError] = useState(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
-  const videoRef = useRef(null);
-  const codeReaderRef = useRef(null);
-
-  useEffect(() => {
-    if (activeTab === 'host' && !sessionId) {
-      onHostSession();
-    }
-  }, [activeTab, sessionId, onHostSession]);
-
-  const startCameraScan = async () => {
-    setIsScanning(true);
-    setScanError(null);
-    try {
-      const codeReader = new BrowserQRCodeReader();
-      codeReaderRef.current = codeReader;
-
-      const videoElement = videoRef.current;
-      if (!videoElement) return;
-
-      await codeReader.decodeFromVideoDevice(undefined, videoElement, (result, err) => {
-        if (result) {
-          const text = result.getText();
-          stopCameraScan();
-          if (text.includes('#')) {
-            window.location.hash = text.substring(text.indexOf('#'));
-          }
-          const extractedCode = text.includes('session=') 
-            ? new URL(text).searchParams.get('session') || text 
-            : text;
-
-          onJoinSession(extractedCode);
-        }
-      });
-    } catch (err) {
-      console.error('[EncryptDrop QR Scanner] Error starting camera:', err);
-      setScanError('Camera permission denied or camera unavailable.');
-      setIsScanning(false);
-    }
-  };
-
-  const stopCameraScan = () => {
-    setIsScanning(false);
-  };
-
-  const handleCopySid = async () => {
+  const handleCopyCode = async () => {
+    if (!sessionId) return;
     const ok = await copyTextToClipboard(sessionId);
     if (ok) {
-      setCopiedSid(true);
-      setTimeout(() => setCopiedSid(false), 2000);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
     }
+  };
+
+  const handleCopyLink = async () => {
+    if (!pairingUrl) return;
+    const ok = await copyTextToClipboard(pairingUrl);
+    if (ok) {
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    }
+  };
+
+  const handleInputChange = (e) => {
+    const raw = e.target.value;
+    // If user pasted a full URL
+    if (raw.includes('session=')) {
+      setManualCode(raw.trim());
+      return;
+    }
+    // Auto-capitalize and keep only alphanumeric characters, max 6
+    const cleaned = raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    setManualCode(cleaned);
   };
 
   const handleManualSubmit = (e) => {
@@ -103,70 +96,129 @@ export default function SessionPairing({ sessionId, pairingUrl, onJoinSession, o
     }
   };
 
-  return (
-    <div className="max-w-md mx-auto mt-10 p-6 bg-[#121824] border border-slate-800 rounded-xl shadow-xl space-y-6">
-      {/* Header Tabs */}
-      <div className="flex bg-[#0b0f17] p-1 rounded-lg border border-slate-800">
-        <button
-          onClick={() => { setActiveTab('host'); stopCameraScan(); }}
-          className={`flex-1 py-2 rounded-md text-xs font-medium transition-colors flex items-center justify-center space-x-2 ${
-            activeTab === 'host' 
-              ? 'bg-[#1e293b] text-slate-100 shadow-sm' 
-              : 'text-slate-500 hover:text-slate-300'
-          }`}
-        >
-          <FiMaximize className="w-3.5 h-3.5" />
-          <span>Show QR</span>
-        </button>
+  // 1. DEDICATED CONNECTING VIEW (When joining via QR scan or URL)
+  if (isJoining) {
+    return (
+      <div className="max-w-md mx-auto mt-6 p-8 bg-[#121824] border border-slate-800 rounded-2xl shadow-2xl flex flex-col items-center text-center space-y-6">
+        <div className="relative flex items-center justify-center my-2">
+          <div className="w-16 h-16 rounded-full bg-sky-500/10 border border-sky-500/30 flex items-center justify-center animate-pulse">
+            <FiShield className="w-7 h-7 text-sky-400" />
+          </div>
+          <div className="absolute inset-0 rounded-full border border-sky-500/20 animate-ping" />
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-base font-semibold text-slate-100">
+            Connecting to Room
+          </h3>
+          <div className="inline-block px-4 py-1.5 bg-[#0b0f17] border border-slate-700/60 rounded-lg shadow-inner">
+            <span className="font-mono text-xl font-bold tracking-[0.25em] text-sky-400">
+              {sessionId || '------'}
+            </span>
+          </div>
+          <p className="text-xs text-slate-400 max-w-xs mx-auto pt-1">
+            Establishing secure end-to-end encrypted connection with peer...
+          </p>
+        </div>
+
+        {joinError && (
+          <div className="w-full p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center space-x-2">
+            <FiAlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span className="text-left flex-1">{joinError}</span>
+          </div>
+        )}
 
         <button
-          onClick={() => setActiveTab('join')}
-          className={`flex-1 py-2 rounded-md text-xs font-medium transition-colors flex items-center justify-center space-x-2 ${
-            activeTab === 'join' 
-              ? 'bg-[#1e293b] text-slate-100 shadow-sm' 
+          onClick={onCancelJoin}
+          className="px-4 py-2 bg-slate-800/90 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl transition-colors flex items-center space-x-2 border border-slate-700/50"
+        >
+          <FiRefreshCw className="w-3.5 h-3.5 text-slate-400" />
+          <span>Cancel & Create New Room</span>
+        </button>
+      </div>
+    );
+  }
+
+  // 2. STANDARD PAIRING VIEW (Share / Join Tabs)
+  return (
+    <div className="max-w-md mx-auto mt-6 p-6 bg-[#121824] border border-slate-800 rounded-2xl shadow-xl space-y-6">
+      {/* Header Tabs */}
+      <div className="flex bg-[#0b0f17] p-1 rounded-xl border border-slate-800">
+        <button
+          onClick={() => setActiveTab('share')}
+          className={`flex-1 py-2.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-center space-x-2 ${
+            activeTab === 'share'
+              ? 'bg-[#1e293b] text-slate-100 shadow-sm'
               : 'text-slate-500 hover:text-slate-300'
           }`}
         >
-          <FiCamera className="w-3.5 h-3.5" />
-          <span>Scan / Join</span>
+          <FiShare2 className="w-3.5 h-3.5" />
+          <span>Share Room</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('join')}
+          className={`flex-1 py-2.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-center space-x-2 ${
+            activeTab === 'join'
+              ? 'bg-[#1e293b] text-slate-100 shadow-sm'
+              : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          <FiLogIn className="w-3.5 h-3.5" />
+          <span>Join with Code</span>
         </button>
       </div>
 
-      {/* HOST TAB CONTENT */}
-      {activeTab === 'host' && (
+      {/* SHARE TAB CONTENT */}
+      {activeTab === 'share' && (
         <div className="flex flex-col items-center text-center space-y-5">
-          <div className="p-3 bg-white rounded-lg border border-slate-200">
+          {/* High-Contrast Crisp QR Code */}
+          <div className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-sm">
             {pairingUrl ? (
-              <QRCodeSVG value={pairingUrl} size={180} level="M" includeMargin={true} />
+              <QRCodeSVG value={pairingUrl} size={180} level="M" includeMargin={false} />
             ) : (
               <div className="w-44 h-44 flex items-center justify-center text-slate-400 text-xs">
-                Generating session...
+                Generating room...
               </div>
             )}
           </div>
 
           <div className="space-y-1">
             <h3 className="text-sm font-semibold text-slate-200">Scan QR Code</h3>
-            <p className="text-xs text-slate-500 max-w-xs">
-              Scan with mobile camera to pair directly.
+            <p className="text-xs text-slate-400 max-w-xs">
+              Point your phone's camera to join instantly, or share the 6-character code below.
             </p>
           </div>
 
-          {/* Session Code & Copy Box */}
-          <div className="w-full bg-[#0b0f17] p-3 rounded-lg border border-slate-800 flex items-center justify-between">
-            <div className="text-left font-mono">
-              <span className="text-[10px] text-slate-500 block uppercase">Session ID</span>
-              <span className="text-xs font-medium text-sky-400">{sessionId || 'Loading...'}</span>
+          {/* 6-Character Room Code & Actions */}
+          <div className="w-full bg-[#0b0f17] p-4 rounded-xl border border-slate-800 flex flex-col items-center space-y-3">
+            <div className="text-center">
+              <span className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold block mb-1">
+                Room Code
+              </span>
+              <div className="text-2xl font-mono font-bold tracking-[0.25em] text-sky-400 select-all">
+                {sessionId || '------'}
+              </div>
             </div>
-            
-            <button
-              onClick={handleCopySid}
-              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md text-xs font-medium transition-colors"
-              title="Copy Session ID"
-            >
-              {copiedSid ? <FiCheck className="w-3.5 h-3.5 text-emerald-400" /> : <FiCopy className="w-3.5 h-3.5" />}
-              <span>{copiedSid ? 'Copied' : 'Copy SID'}</span>
-            </button>
+
+            <div className="flex items-center space-x-2 w-full pt-1">
+              <button
+                onClick={handleCopyCode}
+                className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 bg-slate-800/80 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors border border-slate-700/50"
+                title="Copy 6-character code"
+              >
+                {copiedCode ? <FiCheck className="w-3.5 h-3.5 text-emerald-400" /> : <FiCopy className="w-3.5 h-3.5 text-slate-400" />}
+                <span>{copiedCode ? 'Copied' : 'Copy Code'}</span>
+              </button>
+
+              <button
+                onClick={handleCopyLink}
+                className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 bg-slate-800/80 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors border border-slate-700/50"
+                title="Copy share link"
+              >
+                {copiedLink ? <FiCheck className="w-3.5 h-3.5 text-emerald-400" /> : <FiLink className="w-3.5 h-3.5 text-slate-400" />}
+                <span>{copiedLink ? 'Copied' : 'Copy Link'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -174,51 +226,40 @@ export default function SessionPairing({ sessionId, pairingUrl, onJoinSession, o
       {/* JOIN TAB CONTENT */}
       {activeTab === 'join' && (
         <div className="flex flex-col space-y-5">
-          {/* Camera Scanner View */}
-          <div className="relative bg-[#0b0f17] rounded-lg border border-slate-800 overflow-hidden min-h-[180px] flex items-center justify-center">
-            <video
-              ref={videoRef}
-              className={`w-full h-44 object-cover ${isScanning ? 'block' : 'hidden'}`}
-            />
-            {!isScanning && (
-              <div className="text-center p-6 space-y-3">
-                <FiCamera className="w-8 h-8 text-sky-400 mx-auto" />
-                <button
-                  onClick={startCameraScan}
-                  className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-md transition-colors"
-                >
-                  Start Camera Scanner
-                </button>
-              </div>
-            )}
-            {scanError && (
-              <div className="absolute inset-x-3 bottom-3 p-2 bg-rose-500/10 border border-rose-500/20 rounded-md text-rose-400 text-xs text-center flex items-center justify-center gap-1.5">
-                <FiAlertCircle className="w-3.5 h-3.5" />
-                <span>{scanError}</span>
-              </div>
-            )}
+          <div className="text-center space-y-1">
+            <h3 className="text-sm font-semibold text-slate-200">Enter Room Code</h3>
+            <p className="text-xs text-slate-400">
+              Enter the 6-character code from the host device or paste a share link.
+            </p>
           </div>
 
-          <div className="relative flex items-center justify-center">
-            <div className="border-t border-slate-800 w-full"></div>
-            <span className="bg-[#121824] px-3 text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Or Manual Code</span>
-          </div>
+          <form onSubmit={handleManualSubmit} className="space-y-4">
+            <div className="space-y-1">
+              <input
+                type="text"
+                value={manualCode}
+                onChange={handleInputChange}
+                placeholder="e.g. K9X2B4"
+                autoFocus
+                maxLength={manualCode.includes('session=') ? undefined : 6}
+                className="w-full bg-[#0b0f17] border border-slate-800 rounded-xl px-4 py-3 text-center font-mono text-xl tracking-[0.25em] font-bold text-slate-100 placeholder:text-slate-600 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm placeholder:font-normal focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all uppercase"
+              />
+            </div>
 
-          <form onSubmit={handleManualSubmit} className="flex space-x-2">
-            <input
-              type="text"
-              value={manualCode}
-              onChange={(e) => setManualCode(e.target.value)}
-              placeholder="Session ID (e.g. encryptdrop_123456)"
-              className="flex-1 bg-[#0b0f17] border border-slate-800 rounded-md px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 transition-colors"
-            />
+            {joinError && (
+              <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center space-x-2">
+                <FiAlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span className="text-left flex-1">{joinError}</span>
+              </div>
+            )}
+
             <button
               type="submit"
-              disabled={!manualCode.trim()}
-              className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-medium rounded-md text-xs flex items-center space-x-1.5 transition-colors"
+              disabled={manualCode.trim().length < 6}
+              className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:hover:bg-sky-600 text-white font-medium rounded-xl text-xs flex items-center justify-center space-x-2 transition-all shadow-sm shadow-sky-600/20"
             >
-              <span>Connect</span>
-              <FiArrowRight className="w-3.5 h-3.5" />
+              <span>Connect to Room</span>
+              <FiArrowRight className="w-4 h-4" />
             </button>
           </form>
         </div>

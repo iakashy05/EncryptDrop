@@ -12,8 +12,6 @@
     "tunnel": "npx localtunnel --port 3000"
   },
   "dependencies": {
-    "@zxing/browser": "^0.1.5",
-    "@zxing/library": "^0.21.3",
     "express": "^4.19.2",
     "jszip": "^3.10.1",
     "lucide-react": "^0.395.0",

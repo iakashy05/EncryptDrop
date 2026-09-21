@@ -16,7 +16,12 @@ class SocketSignalingService {
    * @param {string} serverUrl 
    */
   connect(serverUrl = window.location.origin.replace(/^http/, 'ws')) {
-    if (this.socket && this.socket.connected) return;
+    if (this.socket) {
+      if (!this.socket.connected) {
+        this.socket.connect();
+      }
+      return;
+    }
 
     this.socket = io(serverUrl, {
       transports: ['websocket', 'polling'],
