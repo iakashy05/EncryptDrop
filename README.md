@@ -1,71 +1,57 @@
-# EncryptDrop 🔒
-
-> Zero-database, end-to-end encrypted, browser-to-browser P2P file sharing web app.
-
-![EncryptDrop Logo](public/logo.png)
-
-## Features
-
-- **100% Bit-Exact & Lossless**: Stream raw binary chunks directly via WebRTC DataChannels with zero compression or pixel distortion.
-- **End-to-End Encrypted (E2EE)**: AES-256-GCM encryption with keys generated in the browser and automatically synced via WebRTC signaling.
-- **Zero Database / 100% Anonymous**: Ephemeral RAM-only signaling. All buffers and keys are wiped when the session ends.
-- **Folder Zipping on-the-fly**: Select or drop folders and EncryptDrop automatically compresses them into a `.zip` in memory before transfer.
-- **Pair via QR or Session ID**: Scan QR code with your camera or enter the Session ID manually.
-- **Pause, Resume & Cancel**: Full control over active transfers with deterministic IV offset seeking.
-- **Audio & Haptic Feedback**: Native Web Audio API synth chimes and mobile vibration on connect, complete, and disconnect.
+<div align="center">
+  <img src="public/logo.png" alt="EncryptDrop Logo" width="120" />
+  <h1>EncryptDrop</h1>
+  <p><strong>Ultra-fast, zero-storage, browser-to-browser P2P file teleportation.</strong></p>
+</div>
 
 ---
 
-## Getting Started Locally
+## Highlights
+
+- ⚡ **Blazing Fast P2P Streaming**: Direct device-to-device file transfer over WebRTC DataChannels at full network line rate (50–100+ MB/s).
+- 🛡️ **Zero Storage & Complete Privacy**: Direct peer-to-peer transport with zero cloud storage. Your files never touch a server or database.
+- ✋ **Transfer Authorization**: Quick Share / AirDrop style approval modal — recipient inspects file names and sizes before accepting the transfer.
+- 📦 **Lossless & Bit-Exact**: Raw binary streaming with zero quality loss or compression artifacts.
+- 📁 **Folder Bundling on-the-Fly**: Drop entire folders to stream them preserving directory structures.
+- 📱 **Instant Pairing**: Connect instantly with a 6-character room code or camera QR code scan.
+- 🔄 **Session Resilience**: Tab refresh recovery and warnings to prevent accidental disconnects during active transfers.
+- 🎨 **Responsive Dark UI**: Clean glassmorphic centered cards with custom P2P doodle vector background.
+
+---
+
+## Quick Start
 
 ### 1. Install Dependencies
 ```bash
 npm install
 ```
 
-### 2. Start the Signaling Server
+### 2. Start Signaling Server
 ```bash
 npm run server
 ```
-*Signaling server runs on `http://localhost:3001`.*
+*Runs on `http://localhost:3001`.*
 
-### 3. Start the Frontend
+### 3. Start Frontend
 ```bash
 npm run dev
 ```
-*App will open at `http://localhost:3000`.*
+*Runs on `http://localhost:3000`.*
 
 ---
 
-## Deployment Guide
+## Verification & Build
 
-### Deploy Signaling Server to Render (Free)
-1. Push this repository to GitHub.
-2. Go to [Render.com](https://render.com) and click **New +** > **Web Service**.
-3. Connect your repository.
-4. Set **Start Command**: `node server/index.js`
-5. Copy your Render service URL (e.g. `https://your-signaling.onrender.com`).
-
-### Deploy Frontend to Vercel
-1. Import the repository in [Vercel](https://vercel.com/new).
-2. Set Environment Variable:
-   - `VITE_SIGNALING_URL`: `https://your-signaling.onrender.com`
-3. Click **Deploy**!
-
----
-
-## Automated Tests
-
-Run unit and integration tests:
 ```bash
+# Run unit & integration tests
 npm test
-```
 
-Build for production:
-```bash
+# Build for production
 npm run build
 ```
 
-## License
+---
 
-MIT
+<div align="center">
+  <sub>Created with ❤️ by <strong>Akash Yadav</strong> • Licensed under MIT</sub>
+</div>
