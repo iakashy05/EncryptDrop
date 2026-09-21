@@ -13,11 +13,15 @@ const io = new Server(httpServer, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
-  }
+  },
+  pingTimeout: 60000,   // 60s timeout to allow mobile devices to pick files in background
+  pingInterval: 25000   // 25s ping interval
 });
 
 // Rooms state in RAM only: Map<sessionId, Set<socketId>>
 const activeRooms = new Map();
+// Grace period timers for temporary disconnects: Map<sessionId, NodeJS.Timeout>
+const roomGraceTimers = new Map();
 
 io.on('connection', (socket) => {
   console.log(`[EncryptDrop Signaling] Client connected: ${socket.id}`);
@@ -29,8 +33,15 @@ io.on('connection', (socket) => {
       activeRooms.set(sessionId, new Set());
     }
     activeRooms.get(sessionId).add(socket.id);
+
+    // If there was a grace period timer running for this room, cancel it
+    if (roomGraceTimers.has(sessionId)) {
+      clearTimeout(roomGraceTimers.get(sessionId));
+      roomGraceTimers.delete(sessionId);
+    }
+
     socket.emit('room-created', { sessionId, peerId: socket.id });
-    console.log(`[EncryptDrop Signaling] Room created: ${sessionId} by ${socket.id}`);
+    console.log(`[EncryptDrop Signaling] Room created/re-registered: ${sessionId} by ${socket.id}`);
   });
 
   // 2. Join an Existing Session Room
@@ -41,7 +52,13 @@ io.on('connection', (socket) => {
       return;
     }
 
-    if (room.size >= 2) {
+    // Cancel any pending grace timer since peer is reconnecting
+    if (roomGraceTimers.has(sessionId)) {
+      clearTimeout(roomGraceTimers.get(sessionId));
+      roomGraceTimers.delete(sessionId);
+    }
+
+    if (room.size >= 2 && !room.has(socket.id)) {
       socket.emit('room-error', { message: 'Session room is full (Max 2 peers allowed).' });
       return;
     }
@@ -63,24 +80,38 @@ io.on('connection', (socket) => {
     });
   });
 
-  // 4. End Session Signal
+  // 4. End Session Signal (Explicit user action)
   socket.on('end-session', ({ sessionId }) => {
-    socket.to(sessionId).emit('peer-left', { peerId: socket.id });
+    if (roomGraceTimers.has(sessionId)) {
+      clearTimeout(roomGraceTimers.get(sessionId));
+      roomGraceTimers.delete(sessionId);
+    }
+    socket.to(sessionId).emit('peer-left', { peerId: socket.id, explicit: true });
     if (activeRooms.has(sessionId)) {
       activeRooms.delete(sessionId);
+      console.log(`[EncryptDrop Signaling] Room explicitly ended & purged: ${sessionId}`);
     }
   });
 
-  // 5. Leave / Disconnect
+  // 5. Temporary Leave / Disconnect (Network blip, mobile background tab, refresh)
   socket.on('disconnecting', () => {
     for (const sessionId of socket.rooms) {
       if (sessionId !== socket.id && activeRooms.has(sessionId)) {
         const room = activeRooms.get(sessionId);
         room.delete(socket.id);
-        socket.to(sessionId).emit('peer-left', { peerId: socket.id });
-        if (room.size === 0) {
-          activeRooms.delete(sessionId);
-          console.log(`[EncryptDrop Signaling] Room purged from RAM: ${sessionId}`);
+
+        // Start a 60-second grace timer before permanently notifying peer-left or purging
+        if (!roomGraceTimers.has(sessionId)) {
+          const timer = setTimeout(() => {
+            roomGraceTimers.delete(sessionId);
+            // Notify remaining peer if socket didn't reconnect
+            socket.to(sessionId).emit('peer-left', { peerId: socket.id, explicit: false });
+            if (activeRooms.has(sessionId) && activeRooms.get(sessionId).size === 0) {
+              activeRooms.delete(sessionId);
+              console.log(`[EncryptDrop Signaling] Room purged after 60s grace timeout: ${sessionId}`);
+            }
+          }, 60000); // 60s grace period
+          roomGraceTimers.set(sessionId, timer);
         }
       }
     }

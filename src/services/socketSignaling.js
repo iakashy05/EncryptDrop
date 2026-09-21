@@ -28,6 +28,17 @@ class SocketSignalingService {
       autoConnect: true
     });
 
+    this.socket.on('connect', () => {
+      console.log('[EncryptDrop Signaling] Socket connected:', this.socket.id);
+      if (this.sessionId) {
+        if (this.isHost) {
+          this.socket.emit('create-room', { sessionId: this.sessionId });
+        } else {
+          this.socket.emit('join-room', { sessionId: this.sessionId });
+        }
+      }
+    });
+
     this.socket.on('room-created', (data) => this._emitEvent('room-created', data));
     this.socket.on('room-joined', (data) => this._emitEvent('room-joined', data));
     this.socket.on('peer-joined', (data) => this._emitEvent('peer-joined', data));
@@ -38,6 +49,7 @@ class SocketSignalingService {
 
   createRoom(sessionId) {
     this.sessionId = sessionId;
+    this.isHost = true;
     if (this.socket) {
       this.socket.emit('create-room', { sessionId });
     }
@@ -45,6 +57,7 @@ class SocketSignalingService {
 
   joinRoom(sessionId) {
     this.sessionId = sessionId;
+    this.isHost = false;
     if (this.socket) {
       this.socket.emit('join-room', { sessionId });
     }
